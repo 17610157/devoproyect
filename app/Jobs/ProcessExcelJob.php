@@ -33,9 +33,9 @@ class ProcessExcelJob implements ShouldQueue
         if (!Storage::exists($upload->file_path)) {
             $upload->update(['status' => 'ERROR']);
             \App\Models\UploadLog::create([
-                'upload_id'   => $upload->id,
-                'row_number'  => 0,
-                'error_message' => "El archivo no existe en storage: {$upload->file_path}",
+                'upload_id'    => $upload->id,
+                'row_number'   => 0,
+                'error_message'=> "El archivo no existe en storage: {$upload->file_path}",
             ]);
             return;
         }
@@ -45,19 +45,19 @@ class ProcessExcelJob implements ShouldQueue
         try {
             $path = Storage::path($upload->file_path);
 
-            // 1) Abre con PhpSpreadsheet
+            // 1) Abrir Excel
             $spreadsheet = IOFactory::load($path);
             $sheet       = $spreadsheet->getActiveSheet();
 
-            // 2) Lee H3 como fallback y normaliza a Y-m-d
+            // 2) Leer H3 como fecha fallback (Y-m-d) y C3 como "cuenta"
             $fallbackYmd = $this->parseToYmd($sheet->getCell('H3')->getValue());
+            $cuenta      = $this->extractCuenta($sheet); // <- NUEVO
 
-            // 3) Los encabezados están en la fila 9 (1-based)
+            // 3) Encabezados fijos en fila 9 (1-based)
             $headerRow = 9;
 
-            // 4) Valida encabezados requeridos en fila 9
-            //    toArray() devuelve todas las filas; tomamos la 8 (0-based) de PHP
-            $rows = $sheet->toArray(null, true, true, false);
+            // 4) Validar encabezados
+            $rows     = $sheet->toArray(null, true, true, false);
             $headLine = $rows[$headerRow - 1] ?? [];
             $missing  = $this->missingRequiredHeaders($headLine);
             if (!empty($missing)) {
@@ -70,13 +70,13 @@ class ProcessExcelJob implements ShouldQueue
                 return;
             }
 
-            // 5) Importa desde esa fila con fecha fallback para fechas vacías
+            // 5) Importar pasando fallback + cuenta
             Excel::import(
-                new \App\Imports\GenericImport($upload, $headerRow, $fallbackYmd),
+                new \App\Imports\GenericImport($upload, $headerRow, $fallbackYmd, $cuenta),
                 $path
             );
 
-            // 6) Recalcula métricas y estado final
+            // 6) Recalcular
             $success = \App\Models\ProcessedData::where('upload_id', $upload->id)->count();
             $errors  = \App\Models\UploadLog::where('upload_id', $upload->id)->count();
             $total   = $success + $errors;
@@ -99,7 +99,6 @@ class ProcessExcelJob implements ShouldQueue
                 'error_rows'   => $errors,
                 'status'       => $finalStatus,
             ]);
-
         } catch (\Throwable $e) {
             $upload->update(['status' => 'ERROR']);
             \App\Models\UploadLog::create([
@@ -112,24 +111,34 @@ class ProcessExcelJob implements ShouldQueue
 
     /** ==== Helpers ==== */
 
-    /**
-     * Normaliza una posible fecha (serial Excel o string) a 'Y-m-d'.
-     * Acepta 'dd/mm/yyyy [hh:mm:ss]' y otros formatos comunes.
-     */
+    private function extractCuenta($sheet): ?string
+    {
+        try {
+            // Lee C3; puede traer "Cuenta   321743" o solo "321743" o texto libre
+            $raw = $sheet->getCell('C3')->getCalculatedValue();
+            if ($raw === null) return null;
+            $s = trim((string)$raw);
+
+            // Si quisieras extraer solo el número, descomenta:
+            // if (preg_match('/\d+/', $s, $m)) $s = $m[0];
+
+            return $s === '' ? null : $s;
+        } catch (\Throwable $e) {
+            return null;
+        }
+    }
+
     private function parseToYmd($value): ?string
     {
         try {
             if ($value === null || $value === '') return null;
 
-            // Serial de Excel
             if (is_numeric($value)) {
                 return Carbon::instance(ExcelDate::excelToDateTimeObject($value))->format('Y-m-d');
             }
 
-            // String
             $v = trim((string)$value);
 
-            // dd/mm/yyyy [...]
             if (preg_match('/^\d{1,2}\/\d{1,2}\/\d{2,4}/', $v)) {
                 [$datePart] = preg_split('/\s+/', $v);
                 [$d, $m, $y] = array_map('intval', explode('/', $datePart));
@@ -137,17 +146,12 @@ class ProcessExcelJob implements ShouldQueue
                 return Carbon::createFromDate($y, $m, $d)->format('Y-m-d');
             }
 
-            // Genérico: yyyy-mm-dd, mm/dd/yyyy, etc.
             return Carbon::parse($v)->format('Y-m-d');
         } catch (\Throwable $e) {
             return null;
         }
     }
 
-    /**
-     * Valida los encabezados mínimos requeridos en la fila de header.
-     * Recibe la línea cruda y normaliza para comparar.
-     */
     private function missingRequiredHeaders(array $headerLine): array
     {
         $required = [
@@ -168,7 +172,6 @@ class ProcessExcelJob implements ShouldQueue
         return $missing;
     }
 
-    /** Normaliza textos de encabezado: minúscula, sin acentos, espacios->guión_bajo. */
     private function norm($str): string
     {
         $s = mb_strtolower((string) $str, 'UTF-8');

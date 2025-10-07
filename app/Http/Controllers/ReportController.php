@@ -24,11 +24,9 @@ class ReportController extends Controller
         $dateTo   = $request->query('date_to');   // 'YYYY-MM-DD'
         $search   = $request->query('search');    // opcional
 
-        // 1) Agregado PRODUCTO + DÍA con 4 reglas:
-        //   A) Fechas distintas y solicitado == facturado  => qty = solicitado
-        //   B) Fechas distintas y solicitado != facturado  => qty = max(solicitado - facturado, 0)
-        //   C) comentarios contiene 'cancelado' o 'sustituye' => qty = max(solicitado - facturado, 0)
-        //   D) faltante>0 y fechas iguales y facturado>0 => qty = max(solicitado - facturado, 0)
+        // ==========================
+        // 1) Agregado CUENTA + PRODUCTO + DÍA con 4 reglas
+        // ==========================
         $agg = DB::table('processed_data as pd')
             ->when($dateFrom, fn($q,$d) => $q->whereDate('pd.fecha_disponibilidad', '>=', $d))
             ->when($dateTo,   fn($q,$d) => $q->whereDate('pd.fecha_disponibilidad', '<=', $d))
@@ -39,24 +37,22 @@ class ReportController extends Controller
                 });
             })
             ->selectRaw("
-                pd.producto  AS codigo,
-                pd.descripcion AS descripcion,
+                COALESCE(pd.cuenta, '')       AS cuenta,
+                pd.producto                   AS codigo,
+                pd.descripcion                AS descripcion,
                 DATE(pd.fecha_disponibilidad) AS fecha,
                 SUM(
                     CASE
-                        -- A) Fechas distintas y solicitado == facturado => usar solicitado
                         WHEN DATE(pd.fecha_disponibilidad) <> DATE(pd.cambio_fecha_disponibilidad)
                              AND COALESCE(pd.solicitado,0) = COALESCE(pd.facturado,0)
                         THEN CAST(COALESCE(pd.solicitado,0) AS DECIMAL(18,4))
 
-                        -- B) Fechas distintas y solicitado != facturado => max(solicitado - facturado,0)
                         WHEN DATE(pd.fecha_disponibilidad) <> DATE(pd.cambio_fecha_disponibilidad)
                         THEN GREATEST(
                             CAST(COALESCE(pd.solicitado,0) AS DECIMAL(18,4))
                           - CAST(COALESCE(pd.facturado,0)  AS DECIMAL(18,4))
                         , 0)
 
-                        -- C) Comentarios: cancelado / sustituye
                         WHEN LOWER(COALESCE(pd.comentarios,'')) LIKE '%cancelado%'
                           OR LOWER(COALESCE(pd.comentarios,'')) LIKE '%sustituye%'
                         THEN GREATEST(
@@ -64,7 +60,6 @@ class ReportController extends Controller
                           - CAST(COALESCE(pd.facturado,0)  AS DECIMAL(18,4))
                         , 0)
 
-                        -- D) faltante>0 & fechas iguales & facturado>0
                         WHEN COALESCE(pd.faltante,0) > 0
                           AND DATE(pd.fecha_disponibilidad) = DATE(pd.cambio_fecha_disponibilidad)
                           AND COALESCE(pd.facturado,0) > 0
@@ -78,20 +73,17 @@ class ReportController extends Controller
                 ) AS qty,
                 SUM(
                     CASE
-                        -- A) Fechas distintas y solicitado == facturado
                         WHEN DATE(pd.fecha_disponibilidad) <> DATE(pd.cambio_fecha_disponibilidad)
                              AND COALESCE(pd.solicitado,0) = COALESCE(pd.facturado,0)
                         THEN CAST(COALESCE(pd.solicitado,0) AS DECIMAL(18,4))
                              * CAST(COALESCE(pd.precio,0) AS DECIMAL(18,4))
 
-                        -- B) Fechas distintas y solicitado != facturado
                         WHEN DATE(pd.fecha_disponibilidad) <> DATE(pd.cambio_fecha_disponibilidad)
                         THEN GREATEST(
                              CAST(COALESCE(pd.solicitado,0) AS DECIMAL(18,4))
                            - CAST(COALESCE(pd.facturado,0)  AS DECIMAL(18,4))
                         , 0) * CAST(COALESCE(pd.precio,0) AS DECIMAL(18,4))
 
-                        -- C) Comentarios: cancelado / sustituye
                         WHEN LOWER(COALESCE(pd.comentarios,'')) LIKE '%cancelado%'
                           OR LOWER(COALESCE(pd.comentarios,'')) LIKE '%sustituye%'
                         THEN GREATEST(
@@ -99,7 +91,6 @@ class ReportController extends Controller
                            - CAST(COALESCE(pd.facturado,0)  AS DECIMAL(18,4))
                         , 0) * CAST(COALESCE(pd.precio,0) AS DECIMAL(18,4))
 
-                        -- D) faltante>0 & fechas iguales & facturado>0
                         WHEN COALESCE(pd.faltante,0) > 0
                           AND DATE(pd.fecha_disponibilidad) = DATE(pd.cambio_fecha_disponibilidad)
                           AND COALESCE(pd.facturado,0) > 0
@@ -113,12 +104,13 @@ class ReportController extends Controller
                 ) AS importe_dia
             ")
             ->whereNotNull('pd.fecha_disponibilidad')
-            ->groupBy('codigo','descripcion','fecha')
+            ->groupBy('cuenta','codigo','descripcion','fecha')
+            ->orderBy('cuenta')
             ->orderBy('codigo')
             ->get();
 
         if ($agg->isEmpty()) {
-            $headings = ['CÓDIGO','DESCRIPCIÓN','TOTAL SOLICITADO','PRECIO SUMADO','IMPORTE TOTAL'];
+            $headings = ['CUENTA','CÓDIGO','DESCRIPCIÓN','TOTAL SOLICITADO','PRECIO SUMADO','IMPORTE TOTAL'];
             $rows = [];
             return Excel::download(new class($headings,$rows) implements FromArray, WithHeadings, ShouldAutoSize {
                 use Exportable;
@@ -131,7 +123,7 @@ class ReportController extends Controller
         // 2) Columnas de fechas dinámicas (asc)
         $dateColumns = $agg->pluck('fecha')->unique()->sort()->values()->all();
 
-        // 3) “PRECIO SUMADO”: suma precios distintos de filas que cumplen cualquiera de las 4 reglas
+        // 3) PRECIO SUMADO (suma de precios distintos por cuenta+producto que cumplen reglas)
         $priceRows = DB::table('processed_data as pd')
             ->when($dateFrom, fn($q,$d) => $q->whereDate('pd.fecha_disponibilidad', '>=', $d))
             ->when($dateTo,   fn($q,$d) => $q->whereDate('pd.fecha_disponibilidad', '<=', $d))
@@ -152,22 +144,23 @@ class ReportController extends Controller
                          ->whereRaw('COALESCE(pd.facturado,0) > 0');
                   });
             })
-            ->selectRaw('pd.producto AS codigo, pd.descripcion AS descripcion, pd.precio AS precio')
-            ->groupBy('codigo','descripcion','precio')
+            ->selectRaw("COALESCE(pd.cuenta,'') AS cuenta, pd.producto AS codigo, pd.descripcion AS descripcion, pd.precio AS precio")
+            ->groupBy('cuenta','codigo','descripcion','precio')
             ->get();
 
         $priceSumByKey = [];
         foreach ($priceRows as $pr) {
-            $key = $pr->codigo.'|'.$pr->descripcion;
+            $key = $pr->cuenta.'|'.$pr->codigo.'|'.$pr->descripcion;
             $priceSumByKey[$key] = ($priceSumByKey[$key] ?? 0) + (float)$pr->precio;
         }
 
         // 4) Pivot
         $pivot = [];
         foreach ($agg as $r) {
-            $key = $r->codigo.'|'.$r->descripcion;
+            $key = $r->cuenta.'|'.$r->codigo.'|'.$r->descripcion;
             if (!isset($pivot[$key])) {
                 $pivot[$key] = [
+                    'cuenta'        => $r->cuenta,
                     'codigo'        => $r->codigo,
                     'descripcion'   => $r->descripcion,
                     'fechas'        => array_fill_keys($dateColumns, 0.0),
@@ -180,7 +173,7 @@ class ReportController extends Controller
 
         $dateHeadings = array_map(fn($d) => Carbon::parse($d)->format('d/m/Y'), $dateColumns);
         $headings = array_merge(
-            ['CÓDIGO','DESCRIPCIÓN'],
+            ['CUENTA','CÓDIGO','DESCRIPCIÓN'],
             $dateHeadings,
             ['TOTAL SOLICITADO','PRECIO SUMADO','IMPORTE TOTAL']
         );
@@ -203,25 +196,29 @@ class ReportController extends Controller
                 continue;
             }
 
-            $precioSumado = $priceSumByKey[$key] ?? 0.0;
+            $priceKey     = $row['cuenta'].'|'.$row['codigo'].'|'.$row['descripcion'];
+            $precioSumado = $priceSumByKey[$priceKey] ?? 0.0;
             $importeTotal = $row['total_importe'];
 
             $grandQtyFiltrado     += $totalQty;
             $grandImporteFiltrado += $importeTotal;
 
             $rows[] = array_merge(
-                [$row['codigo'], $row['descripcion']],
+                [$row['cuenta'], $row['codigo'], $row['descripcion']],
                 $vals,
                 [$totalQty, $precioSumado, $importeTotal]
             );
         }
 
-        // 5) Importe global (todos los registros)
+        // ==========================
+        // 5) Importe global (todos los registros) = SUM(solicitado * precio) sin filtros  ⬅️  (CAMBIO)
+        // ==========================
         $importeGlobal = (float) DB::table('processed_data')
             ->selectRaw("
                 SUM(
+                    CAST(COALESCE(solicitado, 0) AS DECIMAL(18,4)) *
                     CAST(
-                        REPLACE(REPLACE(REPLACE(TRIM(COALESCE(importe,'0')), ',', ''), '$', ''), ' ', '')
+                        REPLACE(REPLACE(REPLACE(TRIM(COALESCE(precio, '0')), ',', ''), '$', ''), ' ', '')
                         AS DECIMAL(18,4)
                     )
                 ) AS total
@@ -234,25 +231,25 @@ class ReportController extends Controller
         $blankDates = array_fill(0, count($dateColumns), '');
 
         $rows[] = array_merge(
-            ['—', 'SUMA IMPORTE TOTAL (filtro)'],
+            ['—', '—', 'SUMA IMPORTE TOTAL (filtro)'],
             $blankDates,
             ['', '', $grandImporteFiltrado]
         );
 
         $rows[] = array_merge(
-            ['—', 'IMPORTE TOTAL (todos los registros)'],
+            ['—', '—', 'IMPORTE TOTAL (todos los registros)'],
             $blankDates,
             ['', '', $importeGlobal]
         );
 
         $rows[] = array_merge(
-            ['—', 'Porcentaje de Efectividad'],
+            ['—', '—', 'Porcentaje de Efectividad'],
             $blankDates,
             ['', '', $ratio]
         );
 
         // 7) Export con formatos
-        $filename = 'negados_por_dia_'.now()->format('Ymd_His').'.xlsx';
+        $filename = 'negados_por_cuenta_producto_dia_'.now()->format('Ymd_His').'.xlsx';
 
         $export = new class($headings, $rows, count($dateColumns)) implements
             FromArray, WithHeadings, ShouldAutoSize, WithColumnFormatting, WithEvents
@@ -263,10 +260,10 @@ class ReportController extends Controller
             private array $r;
             private int $dateCount;
 
-            private string $totalQtyCol;
-            private string $priceSumCol;
-            private string $importeCol;
-            private array $dateCols = [];
+            private string $totalQtyCol;   // TOTAL SOLICITADO
+            private string $priceSumCol;   // PRECIO SUMADO
+            private string $importeCol;    // IMPORTE TOTAL
+            private array  $dateCols = []; // columnas dinámicas de fechas
 
             public function __construct(array $headings, array $rows, int $dateCount)
             {
@@ -274,16 +271,17 @@ class ReportController extends Controller
                 $this->r = $rows;
                 $this->dateCount = $dateCount;
 
-                $totalQtyIdx = 2 + $dateCount + 1;
-                $priceSumIdx = $totalQtyIdx + 1;
-                $importeIdx  = $priceSumIdx + 1;
+                // 3 fijas: A=1(B cuenta) B=2(código) C=3(descripción); Fechas D..; Totales al final
+                $totalQtyIdx = 3 + $dateCount + 1; // TOTAL SOLICITADO
+                $priceSumIdx = $totalQtyIdx + 1;   // PRECIO SUMADO
+                $importeIdx  = $priceSumIdx + 1;   // IMPORTE TOTAL
 
                 $this->totalQtyCol = Coordinate::stringFromColumnIndex($totalQtyIdx);
                 $this->priceSumCol = Coordinate::stringFromColumnIndex($priceSumIdx);
                 $this->importeCol  = Coordinate::stringFromColumnIndex($importeIdx);
 
                 for ($i = 0; $i < $dateCount; $i++) {
-                    $this->dateCols[] = Coordinate::stringFromColumnIndex(3 + $i);
+                    $this->dateCols[] = Coordinate::stringFromColumnIndex(4 + $i);
                 }
             }
 
@@ -314,7 +312,7 @@ class ReportController extends Controller
                               ->getNumberFormat()
                               ->setFormatCode(NumberFormat::FORMAT_PERCENTAGE_00);
 
-                        $lastColIdx = 2 + $this->dateCount + 3;
+                        $lastColIdx = 3 + $this->dateCount + 3;
                         $lastCol = Coordinate::stringFromColumnIndex($lastColIdx);
                         $sheet->getStyle("A1:{$lastCol}1")->getFont()->setBold(true);
                     }

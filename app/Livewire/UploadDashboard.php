@@ -136,6 +136,9 @@ class UploadDashboard extends Component
     {
         if ($u = Upload::find($id)) {
             Storage::delete($u->file_path);
+            // elimina sus relaciones si tienes cascada lógica
+            $u->logs()->delete();
+            $u->processedData()->delete();
             $u->delete();
         }
         session()->flash('success', 'Carga eliminada.');
@@ -152,6 +155,19 @@ class UploadDashboard extends Component
         }
     }
 
+    /** Eliminar TODO el histórico (archivos + BD) */
+    public function deleteAbsolutelyAll(): void
+    {
+        foreach (Upload::cursor() as $u) {
+            if ($u->file_path) Storage::delete($u->file_path);
+            $u->logs()->delete();
+            $u->processedData()->delete();
+            $u->delete();
+        }
+        $this->resetPage('uploadsPage');
+        session()->flash('success', "Se eliminó todo el histórico de cargas.");
+    }
+
     // -------- RENDER --------
     public function render()
     {
@@ -162,6 +178,7 @@ class UploadDashboard extends Component
             ->latest()
             ->paginate($this->perPage, ['*'], 'uploadsPage');
 
+        // Importante: aquí solo traemos registros de processed_data (incluye 'cuenta')
         $dataRecords = $this->showDataModal && $this->selectedUploadId
             ? ProcessedData::where('upload_id', $this->selectedUploadId)
                 ->latest()
@@ -180,16 +197,4 @@ class UploadDashboard extends Component
             'logs'        => $logs,
         ]);
     }
-    public function deleteAbsolutelyAll(): void
-{
-    foreach (\App\Models\Upload::cursor() as $u) {
-        if ($u->file_path) \Storage::delete($u->file_path);
-        $u->logs()->delete();
-        $u->processedData()->delete();
-        $u->delete();
-    }
-    $this->resetPage('uploadsPage');
-    session()->flash('success', "Se eliminó todo el histórico de cargas.");
-}
-
 }

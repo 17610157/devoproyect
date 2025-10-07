@@ -9,7 +9,7 @@ class ProcessedData extends Model
 {
     protected $table = 'processed_data';
     protected $fillable = [
-        'upload_id','no','producto','descripcion',
+        'upload_id','no','cuenta','producto','descripcion',
         'solicitado','facturado','faltante',
         'precio','importe','peso',
         'fecha_disponibilidad','cambio_fecha_disponibilidad',

@@ -205,42 +205,41 @@
                             <div class="table-responsive">
                                 <table class="table table-sm table-striped mb-0">
                                     <thead class="table-light">
-                                        <tr>
-                                            <th>No</th>
-                                            <th>Producto</th>
-                                            <th>Descripción</th>
-                                            <th>Solicitado</th>
-                                            <th>Facturado</th>
-                                            <th>Faltante</th>
-                                            <th>Precio</th>
-                                            <th>Importe</th>
-                                            <th>Peso</th>
-                                            <th>Fecha disp.</th>
-                                            <th>Cambio fecha</th>
-                                            <th>Comentarios</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        @foreach ($dataRecords as $r)
-                                            <tr>
-                                                <td>{{ $r->no }}</td>
-                                                <td>{{ $r->producto }}</td>
-                                                <td class="text-truncate" style="max-width:240px">
-                                                    {{ $r->descripcion }}</td>
-                                                <td>{{ $r->solicitado }}</td>
-                                                <td>{{ $r->facturado }}</td>
-                                                <td>{{ $r->faltante }}</td>
-                                                <td>{{ $r->precio }}</td>
-                                                <td>{{ $r->importe }}</td>
-                                                <td>{{ $r->peso }}</td>
-                                                <td>{{ $r->fecha_disponibilidad }}</td>
-                                                <td>{{ $r->cambio_fecha_disponibilidad }}</td>
-                                                <td class="text-truncate" style="max-width:240px">
-                                                    {{ $r->comentarios }}</td>
-                                            </tr>
-                                        @endforeach
-                                    </tbody>
-                                </table>
+  <tr>
+      <th>Cuenta</th>        {{-- NUEVO --}}
+      <th>No</th>
+      <th>Producto</th>
+      <th>Descripción</th>
+      <th>Solicitado</th>
+      <th>Facturado</th>
+      <th>Faltante</th>
+      <th>Precio</th>
+      <th>Importe</th>
+      <th>Peso</th>
+      <th>Fecha disp.</th>
+      <th>Cambio fecha</th>
+      <th>Comentarios</th>
+  </tr>
+</thead>
+<tbody>
+  @foreach($dataRecords as $r)
+    <tr>
+        <td>{{ $r->cuenta }}</td>         {{-- NUEVO --}}
+        <td>{{ $r->no }}</td>
+        <td>{{ $r->producto }}</td>
+        <td class="text-truncate" style="max-width:240px">{{ $r->descripcion }}</td>
+        <td>{{ $r->solicitado }}</td>
+        <td>{{ $r->facturado }}</td>
+        <td>{{ $r->faltante }}</td>
+        <td>{{ $r->precio }}</td>
+        <td>{{ $r->importe }}</td>
+        <td>{{ $r->peso }}</td>
+        <td>{{ $r->fecha_disponibilidad }}</td>
+        <td>{{ $r->cambio_fecha_disponibilidad }}</td>
+        <td class="text-truncate" style="max-width:240px">{{ $r->comentarios }}</td>
+    </tr>
+  @endforeach
+</tbody>
                             </div>
                         @else
                             <div class="p-3 text-muted">Sin datos.</div>

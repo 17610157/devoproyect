@@ -15,6 +15,7 @@ return new class extends Migration
             $table->id();
             $table->foreignId('upload_id')->constrained('uploads')->onDelete('cascade');
             $table->integer('no')->nullable();
+            $table->string('cuenta', 100)->nullable();
             $table->string('producto', 100)->nullable();
             $table->string('descripcion', 255)->nullable();
             $table->decimal('solicitado', 12,2)->nullable();
